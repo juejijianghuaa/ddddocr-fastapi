@@ -26,10 +26,10 @@ jobs:
     - name: Enable QEMU emulator
       run: docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
 
-    - name: Build and package for arm64
+    - name: Build and package for x86_64
       run: |
-        docker run --rm -v "$(pwd)/myapp:/usr/src/app" dukun/my-python-packager-arm64:latest /bin/sh -c "/opt/venv/bin/pip install -r requirements.txt && /opt/venv/bin/pyinstaller --onefile app/main.py && /opt/venv/bin/staticx dist/app dist/app_static && chmod 755 dist/app_static"
-        sudo mv "$(pwd)/myapp/dist/app_static" "$(pwd)/tgsou-arm64"
+        docker run --rm -v "$(pwd)/myapp:/usr/src/app" dukun/my-python-packager /bin/sh -c "/opt/venv/bin/pip install -r requirements.txt && /opt/venv/bin/pyinstaller --onefile app/main.py && /opt/venv/bin/staticx dist/app dist/app_static && chmod 755 dist/app_static"
+        sudo mv "$(pwd)/myapp/dist/app_static" "$(pwd)/tgsou-linux"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
