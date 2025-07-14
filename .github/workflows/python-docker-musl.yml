@@ -27,7 +27,7 @@ jobs:
       run: docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
     - name: Build and package for x86_64
       run: |
-        docker run --rm -v "$(pwd):/usr/src/app" juejijianghu/my-python-packager /bin/sh -c "/opt/venv/bin/pip install -r requirements.txt && /opt/venv/bin/pyinstaller --onefile app/main.py && /opt/venv/bin/staticx dist/main dist/app_static && chmod 755 dist/app_static"
+        docker run --rm -v "$(pwd):/usr/src/app" juejijianghu/my-python-packager /bin/sh -c "/opt/venv/bin/pip install -r requirements.txt && /opt/venv/bin/pyinstaller --onefile main.py && /opt/venv/bin/staticx dist/main dist/app_static && chmod 755 dist/app_static"
         sudo mv "$(pwd)/dist/app_static" "$(pwd)/tgsou-linux"
 
     - name: Upload artifact
