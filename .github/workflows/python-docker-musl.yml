@@ -28,7 +28,7 @@ jobs:
 
     - name: Build and package for x86_64
       run: |
-        docker run --rm -v "$(pwd):/usr/src/app" dukun/my-python-packager /bin/sh -c "/opt/venv/bin/pip install -r requirements.txt && /opt/venv/bin/pyinstaller --onefile app/main.py && /opt/venv/bin/staticx dist/app dist/app_static && chmod 755 dist/app_static"
+        docker run --rm -v "$(pwd):/usr/src/app" dukun/my-python-packager /bin/sh -c "/opt/venv/bin/python3 -m /opt/venv/bin/pip install --upgrade pip&&/opt/venv/bin/pip install -r requirements.txt && /opt/venv/bin/pyinstaller --onefile app/main.py && /opt/venv/bin/staticx dist/app dist/app_static && chmod 755 dist/app_static"
         sudo mv "$(pwd)/myapp/dist/app_static" "$(pwd)/tgsou-linux"
 
     - name: Upload artifact
