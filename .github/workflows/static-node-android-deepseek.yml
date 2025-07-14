@@ -1,0 +1,96 @@
+name: Build Node.js for Android2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-android-node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Setup build environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential python3 git wget unzip ninja-build
+        
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'  # Node 20 更兼容 Python 3.9-3.10
+
+    - name: Download Android NDK
+      run: |
+        NDK_VERSION=r25b
+        wget https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
+        unzip android-ndk-${NDK_VERSION}-linux.zip
+        echo "NDK_HOME=$(pwd)/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+        echo "TOOLCHAIN_DIR=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64" >> $GITHUB_ENV
+        
+    - name: Setup toolchain
+      run: |
+        echo "$TOOLCHAIN_DIR/bin" >> $GITHUB_PATH
+        echo "AR=aarch64-linux-android-ar" >> $GITHUB_ENV
+        echo "CC=aarch64-linux-android21-clang" >> $GITHUB_ENV
+        echo "CXX=aarch64-linux-android21-clang++" >> $GITHUB_ENV
+        
+    - name: Clone Node.js
+      run: |
+        git clone --depth=1 --branch=v20.12.1 https://github.com/nodejs/node.git
+        
+    - name: Configure Node.js
+      run: |
+        cd node
+        # 创建修复配置
+        cat > android_configure.gypi << EOF
+        {
+          'target_defaults': {
+            'cflags': ['-fPIE'],
+            'ldflags': ['-fPIE', '-pie']
+          },
+          'variables': {
+            'arm_fpu': 'neon',
+            'target_arch': 'arm64',
+            'node_byteorder': 'little',
+            'node_install_npm': 'false',
+            'node_prefix': '/',
+            'node_shared_openssl': 'false',
+            'node_use_openssl': 'true',
+            'node_shared_zlib': 'false',
+            'openssl_no_asm': 1,
+            'v8_enable_31bit_smis_on_64bit_arch': 0,
+          }
+        }
+        EOF
+        
+        # 修正的配置命令 - 移除了有问题的 --gyp-flags
+        ./configure \
+          --dest-cpu=arm64 \
+          --dest-os=android \
+          --cross-compiling \
+          --with-arm-float-abi=hard \
+          --enable-static \
+          --without-npm \
+          --openssl-no-asm \
+          --ninja \
+          --config=android_configure
+        
+    - name: Build Node.js
+      run: |
+        cd node
+        make -j$(nproc) V=1  # 开启详细日志
+        
+    - name: Verify binary
+      run: |
+        cd node/out/Release
+        file node
+        ls -lh node
+        
+    - name: Archive binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-node-bin
+        path: node/out/Release/node

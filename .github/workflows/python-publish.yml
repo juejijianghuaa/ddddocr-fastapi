@@ -1,0 +1,54 @@
+name: Python application
+
+on:
+  schedule:
+    - cron: '0 * * * *' # 每 小时运行一次
+  workflow_dispatch: # 手动触发
+
+jobs:
+  run-python-script:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.9' # 可以根据需要更改 Python 版本
+
+    - name: Run Python script
+      run: |
+  
+        git clone https://github.com/juejijianghuaa/telegram-channel-video-downloader.git
+        
+        cd tg
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        rm -rf files/PandaGroovePG/*
+        python main.py
+        
+        cd ..
+        cd telegram-channel-video-downloader
+        
+        # 复制上一个目录中的文件到当前目录
+        cp -r ../tg/files/PandaGroovePG/* .
+        content=$(cat "output.txt")
+       
+        unzip -o "*.zip" -d pg
+        rm -rf *.zip
+        rm -rf output.txt
+      
+        git config --global user.name "juejijianghuaa"
+        git config --global user.email "494173758@qq.com"
+        
+   
+        git remote set-url origin https://juejijianghuaa:${{ secrets.TOKEN }}@github.com/juejijianghuaa/telegram-channel-video-downloader.git
+        git add .
+        git commit -m "$content"  || echo "没有文件需要提交"
+        git push -f origin main
+    env:
+        GITHUB_TOKEN: ${{ secrets.TOKEN }}
+
+        

@@ -1,0 +1,42 @@
+name: python-docker-musl
+
+on:
+  workflow_dispatch: # 手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v1
+
+    - name: Install Docker and dependencies
+      run: |
+        sudo apt-get update
+        mkdir -p ~/.docker/cli-plugins/
+        curl -L https://github.com/docker/buildx/releases/download/v0.10.0/buildx-v0.10.0.linux-amd64 -o ~/.docker/cli-plugins/docker-buildx
+        chmod +x ~/.docker/cli-plugins/docker-buildx
+        echo '{"experimental": true}' | sudo tee /etc/docker/daemon.json
+        sudo systemctl restart docker
+
+    - name: Enable QEMU emulator
+      run: docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+
+    - name: Build and package for arm64
+      run: |
+        docker run --rm -v "$(pwd)/myapp:/usr/src/app" dukun/my-python-packager-arm64:latest /bin/sh -c "/opt/venv/bin/pip install -r requirements.txt && /opt/venv/bin/pyinstaller --onefile app/main.py && /opt/venv/bin/staticx dist/app dist/app_static && chmod 755 dist/app_static"
+        sudo mv "$(pwd)/myapp/dist/app_static" "$(pwd)/tgsou-arm64"
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: built-binaries
+        path: |
+          tgsou-armV7
+          tgsou-linux
+          tgsou-arm64
+

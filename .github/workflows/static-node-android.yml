@@ -1,0 +1,379 @@
+# .github/workflows/build-android-node.yml
+name: Build Static Node.js for Android
+
+on:
+  workflow_dispatch: # 手动触发
+    inputs:
+      node_version:
+        description: 'Node.js version to build'
+        required: true
+        default: 'v18.20.8'
+      android_api:
+        description: 'Android API level'
+        required: true
+        default: '23'
+
+env:
+  NODE_VERSION: ${{ github.event.inputs.node_version || 'v20.11.0' }}
+  ANDROID_API: ${{ github.event.inputs.android_api || '23' }}
+  NDK_VERSION: 'r25c'
+
+jobs:
+  build-android-node:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        arch: [arm64-v8a, armeabi-v7a, x86_64]
+        include:
+          - arch: arm64-v8a
+            target: aarch64-linux-android
+            cc: aarch64-linux-android${{ github.event.inputs.android_api || '28' }}-clang
+            cxx: aarch64-linux-android${{ github.event.inputs.android_api || '28' }}-clang++
+            node_arch: arm64
+          - arch: armeabi-v7a
+            target: armv7a-linux-androideabi
+            cc: armv7a-linux-androideabi${{ github.event.inputs.android_api || '28' }}-clang
+            cxx: armv7a-linux-androideabi${{ github.event.inputs.android_api || '28' }}-clang++
+            node_arch: arm
+          - arch: x86_64
+            target: x86_64-linux-android
+            cc: x86_64-linux-android${{ github.event.inputs.android_api || '28' }}-clang
+            cxx: x86_64-linux-android${{ github.event.inputs.android_api || '28' }}-clang++
+            node_arch: x64
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          python3-dev \
+          ninja-build \
+          pkg-config \
+          libtool \
+          autoconf \
+          automake \
+          cmake \
+          ccache \
+          git
+    - name: Setup Android NDK
+      uses: nttld/setup-ndk@v1
+      id: setup-ndk
+      with:
+        ndk-version: ${{ env.NDK_VERSION }}
+    - name: Check NDK path
+      run: |
+        export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
+        echo "NDK path: $ANDROID_NDK_HOME"
+        ls -l $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/
+    - name: Cache Node.js source
+      uses: actions/cache@v3
+      with:
+        path: node-source
+        key: node-source-${{ env.NODE_VERSION }}
+        restore-keys: |
+          node-source-
+    - name: Download Node.js source
+      run: |
+        if [ ! -d "node-source" ]; then
+          git clone --depth=1 --branch=${{ env.NODE_VERSION }} https://github.com/nodejs/node.git node-source
+        fi
+        cd node-source
+        git submodule update --init --recursive
+    - name: Configure build environment
+      run: |
+        cd node-source
+        # 设置NDK环境变量
+        export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
+        export API=${{ env.ANDROID_API }}
+        export TARGET=${{ matrix.target }}
+        
+        export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET}${API}-clang"
+        export CXX="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET}${API}-clang++"
+        export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+        $CC --version
+        $CXX --version
+        # 设置交叉编译工具链
+        export AR=${{ matrix.target }}-ar
+        export STRIP=${{ matrix.target }}-strip
+        export RANLIB=${{ matrix.target }}-ranlib
+        export LINK=${{ matrix.cxx }}
+        
+        # 配置编译选项
+        ./configure \
+          --dest-cpu=${{ matrix.node_arch }} \
+          --dest-os=android \
+          --cross-compiling \
+          --fully-static \
+          --enable-static \
+          --without-npm \
+          --without-corepack \
+          --without-intl \
+          --v8-lite-mode \
+          --openssl-no-asm \
+          --with-arm-float-abi=hard \
+          --with-arm-fpu=neon || true
+        
+        # 保存配置
+        echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
+        echo "CC=$CC" >> $GITHUB_ENV
+        echo "CXX=$CXX" >> $GITHUB_ENV
+        echo "AR=$AR" >> $GITHUB_ENV
+        echo "STRIP=$STRIP" >> $GITHUB_ENV
+        echo "RANLIB=$RANLIB" >> $GITHUB_ENV
+        echo "LINK=$LINK" >> $GITHUB_ENV
+        
+        # 显示配置信息
+        echo "Build configuration:"
+        echo "  Architecture: ${{ matrix.arch }}"
+        echo "  Target: ${{ matrix.target }}"
+        echo "  Node arch: ${{ matrix.node_arch }}"
+        echo "  CC: $CC"
+        echo "  CXX: $CXX"
+    - name: Build Node.js
+      run: |
+        cd node-source
+        
+        # 设置环境变量
+        export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+        
+        # 开始编译
+        make -j$(nproc) || make -j1
+        
+        # 验证编译结果
+        if [ -f "out/Release/node" ]; then
+          echo "Build successful for ${{ matrix.arch }}"
+          file out/Release/node
+          ls -la out/Release/node
+        else
+          echo "Build failed for ${{ matrix.arch }}"
+          exit 1
+        fi
+    - name: Strip and optimize binary
+      run: |
+        cd node-source
+        
+        # 设置环境变量
+        export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+        
+        # 压缩二进制文件
+        $STRIP out/Release/node
+        
+        # 创建输出目录
+        mkdir -p ../output/${{ matrix.arch }}
+        
+        # 复制二进制文件
+        cp out/Release/node ../output/${{ matrix.arch }}/node
+        
+        # 显示文件信息
+        echo "Final binary info:"
+        ls -la ../output/${{ matrix.arch }}/node
+        file ../output/${{ matrix.arch }}/node
+#    - name: Create Android test script
+#      run: |
+#        mkdir -p android-test
+#        cat > android-test/test-node.sh << 'EOF'
+#        #!/system/bin/sh
+#        # Android Node.js test script
+#
+#        echo "Testing Node.js on Android..."
+#        echo "Architecture: $(uname -m)"
+#        echo "Kernel: $(uname -r)"
+#
+#        # 基本功能测试
+#        ./node -e "console.log('Hello from Node.js on Android!')"
+#        ./node -e "console.log('Node.js version:', process.version)"
+#        ./node -e "console.log('Architecture:', process.arch)"
+#        ./node -e "console.log('Platform:', process.platform)"
+#
+#        # 模块测试
+#        ./node -e "console.log('Testing fs module...'); console.log(require('fs').readdirSync('.').slice(0, 3))"
+#
+#        # 性能测试
+#        ./node -e "
+#        console.time('Performance test');
+#        let sum = 0;
+#        for(let i = 0; i < 100000; i++) sum += i;
+#        console.log('Sum:', sum);
+#        console.timeEnd('Performance test');
+#        "
+#
+#        echo "All tests completed!"
+#        EOF
+#
+#        chmod +x android-test/test-node.sh
+#        cp android-test/test-node.sh output/${{ matrix.arch }}/
+#
+#    - name: Package artifacts
+#      run: |
+#        cd output/${{ matrix.arch }}
+#
+#        # 创建README
+#        cat > README.md << EOF
+#        # Node.js ${{ env.NODE_VERSION }} for Android (${{ matrix.arch }})
+#
+#        ## Build Information
+#        - Node.js Version: ${{ env.NODE_VERSION }}
+#        - Android API Level: ${{ env.ANDROID_API }}
+#        - Architecture: ${{ matrix.arch }}
+#        - Build Date: $(date)
+#        - Build SHA: ${{ github.sha }}
+#
+#        ## Usage
+#        1. Push to Android device:
+#           \`\`\`bash
+#           adb push node /data/local/tmp/
+#           adb push test-node.sh /data/local/tmp/
+#           adb shell chmod +x /data/local/tmp/node
+#           adb shell chmod +x /data/local/tmp/test-node.sh
+#           \`\`\`
+#
+#        2. Run on Android:
+#           \`\`\`bash
+#           adb shell /data/local/tmp/test-node.sh
+#           \`\`\`
+#
+#        ## Binary Information
+#        - File: node
+#        - Size: $(du -h node | cut -f1)
+#        - Type: $(file node)
+#
+#        ## Notes
+#        - This is a statically compiled binary
+#        - No additional dependencies required
+#        - Compatible with Android API ${{ env.ANDROID_API }}+
+#        EOF
+#
+#        # 创建版本信息
+#        echo "${{ env.NODE_VERSION }}" > VERSION
+#        echo "${{ matrix.arch }}" > ARCH
+#        echo "${{ env.ANDROID_API }}" > API_LEVEL
+#        echo "${{ github.sha }}" > BUILD_SHA
+#
+#        # 创建压缩包
+#        tar -czf ../node-${{ env.NODE_VERSION }}-android-${{ matrix.arch }}.tar.gz *
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: node-${{ env.NODE_VERSION }}-android-${{ matrix.arch }}
+        path: |
+          output/${{ matrix.arch }}/*
+          output/node-${{ env.NODE_VERSION }}-android-${{ matrix.arch }}.tar.gz
+        retention-days: 30
+
+    - name: Upload to release (if tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: output/node-${{ env.NODE_VERSION }}-android-${{ matrix.arch }}.tar.gz
+        body: |
+          ## Node.js ${{ env.NODE_VERSION }} for Android
+          
+          Static compiled Node.js binaries for Android devices.
+          
+          ### Supported Architectures
+          - arm64-v8a (64-bit ARM)
+          - armeabi-v7a (32-bit ARM)
+          - x86_64 (64-bit x86)
+          
+          ### Requirements
+          - Android API Level ${{ env.ANDROID_API }}+
+          - Root access recommended for full functionality
+          
+          ### Installation
+          See individual README files for usage instructions.
+      env:
+        GITHUB_TOKEN: ${{ secrets.TOKEN }}
+#
+#  test-android-emulator:
+#    needs: build-android-node
+#    runs-on: ubuntu-latest
+#    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+#
+#    steps:
+#    - name: Checkout repository
+#      uses: actions/checkout@v4
+#
+#    - name: Download artifacts
+#      uses: actions/download-artifact@v3
+#      with:
+#        name: node-${{ env.NODE_VERSION }}-android-arm64-v8a
+#        path: ./android-test
+#
+#    - name: Enable KVM
+#      run: |
+#        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node_device"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+#        sudo udevadm control --reload-rules
+#        sudo udevadm trigger --name-match=kvm
+#
+#    - name: Setup Android SDK
+#      uses: android-actions/setup-android@v3
+#      with:
+#        api-level: ${{ env.ANDROID_API }}
+#        target: default
+#        arch: arm64-v8a
+#
+#    - name: Run Android Emulator test
+#      uses: reactivecircus/android-emulator-runner@v2
+#      with:
+#        api-level: ${{ env.ANDROID_API }}
+#        target: default
+#        arch: arm64-v8a
+#        script: |
+#          # 推送文件到模拟器
+#          adb push android-test/node /data/local/tmp/
+#          adb push android-test/test-node.sh /data/local/tmp/
+#          adb shell chmod +x /data/local/tmp/node
+#          adb shell chmod +x /data/local/tmp/test-node.sh
+#
+#          # 运行测试
+#          adb shell "cd /data/local/tmp && ./test-node.sh"
+#
+#          # 检查结果
+#          if adb shell "cd /data/local/tmp && ./node -e 'console.log(\"SUCCESS\")'" | grep -q "SUCCESS"; then
+#            echo "✅ Android emulator test passed"
+#          else
+#            echo "❌ Android emulator test failed"
+#            exit 1
+#          fi
+#
+#  create-summary:
+#    needs: build-android-node
+#    runs-on: ubuntu-latest
+#    if: always()
+#
+#    steps:
+#    - name: Create build summary
+#      run: |
+#        echo "# Node.js ${{ env.NODE_VERSION }} Android Build Summary" >> $GITHUB_STEP_SUMMARY
+#        echo "" >> $GITHUB_STEP_SUMMARY
+#        echo "## Build Status" >> $GITHUB_STEP_SUMMARY
+#        echo "- **Node.js Version**: ${{ env.NODE_VERSION }}" >> $GITHUB_STEP_SUMMARY
+#        echo "- **Android API Level**: ${{ env.ANDROID_API }}" >> $GITHUB_STEP_SUMMARY
+#        echo "- **Build Date**: $(date)" >> $GITHUB_STEP_SUMMARY
+#        echo "- **Commit SHA**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+#        echo "" >> $GITHUB_STEP_SUMMARY
+#        echo "## Supported Architectures" >> $GITHUB_STEP_SUMMARY
+#        echo "- ✅ arm64-v8a (64-bit ARM)" >> $GITHUB_STEP_SUMMARY
+#        echo "- ✅ armeabi-v7a (32-bit ARM)" >> $GITHUB_STEP_SUMMARY
+#        echo "- ✅ x86_64 (64-bit x86)" >> $GITHUB_STEP_SUMMARY
+#        echo "" >> $GITHUB_STEP_SUMMARY
+#        echo "## Download" >> $GITHUB_STEP_SUMMARY
+#        echo "Artifacts are available in the **Actions** tab for 30 days." >> $GITHUB_STEP_SUMMARY
+#        echo "" >> $GITHUB_STEP_SUMMARY
+#        echo "## Usage" >> $GITHUB_STEP_SUMMARY
+#        echo '```bash' >> $GITHUB_STEP_SUMMARY
+#        echo 'adb push node /data/local/tmp/' >> $GITHUB_STEP_SUMMARY
+#        echo 'adb shell chmod +x /data/local/tmp/node' >> $GITHUB_STEP_SUMMARY
+#        echo 'adb shell /data/local/tmp/node -e "console.log(\"Hello Android!\")"' >> $GITHUB_STEP_SUMMARY
+#        echo '```' >> $GITHUB_STEP_SUMMARY
